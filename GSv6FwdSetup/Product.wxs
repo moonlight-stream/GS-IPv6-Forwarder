@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="IPv6 Forwarder for GS Protocol" Language="1033" Version="1.0.0.0" Manufacturer="Cameron Gutman" UpgradeCode="cae27153-26ed-4da2-8dd5-8cddc7126a05">
+  <Product Id="*" Name="IPv6 Forwarder for GS Protocol" Language="1033" Version="0.1.0.0" Manufacturer="Cameron Gutman" UpgradeCode="cae27153-26ed-4da2-8dd5-8cddc7126a05">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
@@ -14,7 +14,7 @@
   <Fragment>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFilesFolder">
-        <Directory Id="INSTALLFOLDER" Name="GSv6FwdSetup" />
+        <Directory Id="INSTALLFOLDER" Name="GS IPv6 Forwarder" />
       </Directory>
     </Directory>
   </Fragment>
