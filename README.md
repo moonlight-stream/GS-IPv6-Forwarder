@@ -8,7 +8,7 @@ This tool is intended for very experienced users that are familar with IPv6 conf
 # Instructions
 1. Download MSI package from the [GitHub Releases](https://github.com/moonlight-stream/GS-IPv6-Forwarder/releases) page.
 2. Install the package on your gaming PC. The service will run automatically in the background.
-4. Ensure your router's IPv6 firewall is configured to allow the GameStream ports (TCP 47984, 47989 and UDP 47998, 47999, 48000, 48010)
+4. Ensure your router's IPv6 firewall is configured to allow the GameStream ports (TCP 47984, 47989, 48010 and UDP 47998, 47999, 48000, 48002, 48010)
 3. Give it a try! Connect via Moonlight using an IPv6 address or host name.
 
 # Troubleshooting
