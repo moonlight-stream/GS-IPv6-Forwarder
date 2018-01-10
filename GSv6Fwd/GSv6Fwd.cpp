@@ -14,11 +14,11 @@
 #define SERVICE_NAME L"GSv6FwdSvc"
 
 static const unsigned short UDP_PORTS[] = {
-	47998, 47999, 48000, 48010
+	47998, 47999, 48000, 48002, 48010
 };
 
 static const unsigned short TCP_PORTS[] = {
-	47984, 47989
+	47984, 47989, 48010
 };
 
 typedef struct _SOCKET_TUPLE {
