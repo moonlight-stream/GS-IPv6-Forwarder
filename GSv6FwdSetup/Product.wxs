@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
      xmlns:fire="http://schemas.microsoft.com/wix/FirewallExtension">
-  <Product Id="*" Name="IPv6 Forwarder for GS Protocol" Language="1033" Version="0.2.0.0" Manufacturer="Cameron Gutman" UpgradeCode="cae27153-26ed-4da2-8dd5-8cddc7126a05">
+  <Product Id="*" Name="IPv6 Forwarder for GS Protocol" Language="1033" Version="1.0.0.0" Manufacturer="Moonlight Game Streaming Project" UpgradeCode="cae27153-26ed-4da2-8dd5-8cddc7126a05">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
