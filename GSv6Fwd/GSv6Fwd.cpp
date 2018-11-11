@@ -3,15 +3,19 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 
 #pragma comment(lib, "ws2_32")
 #include <WinSock2.h>
 #include <Ws2ipdef.h>
+#include <WS2tcpip.h>
 
 #pragma comment(lib, "iphlpapi")
 #include <Iphlpapi.h>
 
 #define SERVICE_NAME L"GSv6FwdSvc"
+
+bool PCPMapPort(PSOCKADDR_STORAGE localAddr, int localAddrLen, PSOCKADDR_STORAGE pcpAddr, int pcpAddrLen, int proto, int port, bool enable, bool indefinite);
 
 static const unsigned short UDP_PORTS[] = {
 	47998, 47999, 48000, 48002, 48010
@@ -317,8 +321,8 @@ int StartTcpRelay(unsigned short Port)
 
 int
 ForwardUdpPacket(SOCKET from, SOCKET to,
-	             PSOCKADDR target, int targetLen,
-	             PSOCKADDR source, int sourceLen)
+				 PSOCKADDR target, int targetLen,
+				 PSOCKADDR source, int sourceLen)
 {
 	int len;
 	char buffer[4096];
@@ -453,16 +457,112 @@ int StartUdpRelay(unsigned short Port)
 	return 0;
 }
 
+void NETIOAPI_API_ IpInterfaceChangeNotificationCallback(PVOID context, PMIB_IPINTERFACE_ROW, MIB_NOTIFICATION_TYPE)
+{
+	SetEvent((HANDLE)context);
+}
+
+void UpdatePcpPinholes()
+{
+	union {
+		IP_ADAPTER_ADDRESSES addresses;
+		char buffer[8192];
+	};
+	ULONG error;
+	ULONG length;
+	PIP_ADAPTER_ADDRESSES currentAdapter;
+	PIP_ADAPTER_UNICAST_ADDRESS currentAddress;
+
+	// Get all IPv6 interfaces
+	length = sizeof(buffer);
+	error = GetAdaptersAddresses(AF_INET6,
+		GAA_FLAG_SKIP_ANYCAST |
+		GAA_FLAG_SKIP_MULTICAST |
+		GAA_FLAG_SKIP_DNS_SERVER |
+		GAA_FLAG_SKIP_FRIENDLY_NAME |
+		GAA_FLAG_INCLUDE_GATEWAYS,
+		NULL,
+		&addresses,
+		&length);
+	if (error != ERROR_SUCCESS) {
+		fprintf(stderr, "GetAdaptersAddresses() failed: %d\n", error);
+		return;
+	}
+
+	currentAdapter = &addresses;
+	while (currentAdapter != NULL) {
+		// Skip over interfaces with no gateway
+		if (currentAdapter->FirstGatewayAddress == NULL) {
+			currentAdapter = currentAdapter->Next;
+			continue;
+		}
+
+		PSOCKADDR_IN6 gatewayAddrV6 = (PSOCKADDR_IN6)currentAdapter->FirstGatewayAddress->Address.lpSockaddr;
+
+		char addressStr[128];
+		inet_ntop(AF_INET6, &gatewayAddrV6->sin6_addr, addressStr, sizeof(addressStr));
+
+		printf("Using PCP server: %s%%%d\n", addressStr, gatewayAddrV6->sin6_scope_id);
+
+		// Create pinholes for all public IPv6 addresses
+		currentAddress = currentAdapter->FirstUnicastAddress;
+		while (currentAddress != NULL) {
+			assert(currentAddress->Address.lpSockaddr->sa_family == AF_INET6);
+
+			PSOCKADDR_IN6 currentAddrV6 = (PSOCKADDR_IN6)currentAddress->Address.lpSockaddr;
+
+			// Exclude link-local addresses
+			if (currentAddrV6->sin6_scope_id == 0) {
+				inet_ntop(AF_INET6, &currentAddrV6->sin6_addr, addressStr, sizeof(addressStr));
+				printf("Updating PCP mappings for address %s\n", addressStr);
+
+				for (int i = 0; i < ARRAYSIZE(TCP_PORTS); i++) {
+					PCPMapPort(
+						(PSOCKADDR_STORAGE)currentAddrV6,
+						currentAddress->Address.iSockaddrLength,
+						(PSOCKADDR_STORAGE)currentAdapter->FirstGatewayAddress->Address.lpSockaddr,
+						currentAdapter->FirstGatewayAddress->Address.iSockaddrLength,
+						IPPROTO_TCP,
+						TCP_PORTS[i],
+						true,
+						false);
+				}
+				for (int i = 0; i < ARRAYSIZE(UDP_PORTS); i++) {
+					PCPMapPort(
+						(PSOCKADDR_STORAGE)currentAddrV6,
+						currentAddress->Address.iSockaddrLength,
+						(PSOCKADDR_STORAGE)currentAdapter->FirstGatewayAddress->Address.lpSockaddr,
+						currentAdapter->FirstGatewayAddress->Address.iSockaddrLength,
+						IPPROTO_UDP,
+						UDP_PORTS[i],
+						true,
+						false);
+				}
+			}
+
+			currentAddress = currentAddress->Next;
+		}
+
+		currentAdapter = currentAdapter->Next;
+	}
+}
+
 int Run(void)
 {
 	int err;
 	WSADATA data;
+
+	HANDLE ifaceChangeEvent = CreateEvent(nullptr, true, false, nullptr);
 
 	err = WSAStartup(MAKEWORD(2, 0), &data);
 	if (err == SOCKET_ERROR) {
 		fprintf(stderr, "WSAStartup() failed: %d\n", err);
 		return err;
 	}
+
+	// Watch for IPv6 address and interface changes
+	HANDLE ifaceChangeHandle;
+	NotifyIpInterfaceChange(AF_INET6, IpInterfaceChangeNotificationCallback, ifaceChangeEvent, false, &ifaceChangeHandle);
 
 	for (int i = 0; i < ARRAYSIZE(TCP_PORTS); i++) {
 		err = StartTcpRelay(TCP_PORTS[i]);
@@ -479,6 +579,10 @@ int Run(void)
 			return err;
 		}
 	}
+
+	do {
+		UpdatePcpPinholes();
+	} while (WaitForSingleObject(ifaceChangeEvent, 120 * 1000) != WAIT_FAILED);
 
 	return 0;
 }
@@ -524,6 +628,10 @@ ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv)
 	ServiceStatus.dwControlsAccepted = SERVICE_ACCEPT_STOP;
 	ServiceStatus.dwCheckPoint = 0;
 
+	// Tell SCM we're running
+	ServiceStatus.dwCurrentState = SERVICE_RUNNING;
+	SetServiceStatus(ServiceStatusHandle, &ServiceStatus);
+
 	// Start the relay
 	err = Run();
 	if (err != 0) {
@@ -532,10 +640,6 @@ ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv)
 		SetServiceStatus(ServiceStatusHandle, &ServiceStatus);
 		return;
 	}
-
-	// Tell SCM we're running
-	ServiceStatus.dwCurrentState = SERVICE_RUNNING;
-	SetServiceStatus(ServiceStatusHandle, &ServiceStatus);
 }
 
 
@@ -548,7 +652,6 @@ int main(int argc, char* argv[])
 {
 	if (argc == 2 && !strcmp(argv[1], "exe")) {
 		Run();
-		SuspendThread(GetCurrentThread());
 		return 0;
 	}
 
