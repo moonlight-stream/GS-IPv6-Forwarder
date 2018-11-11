@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
      xmlns:fire="http://schemas.microsoft.com/wix/FirewallExtension">
-  <Product Id="*" Name="IPv6 Forwarder for GS Protocol" Language="1033" Version="1.0.0.0" Manufacturer="Moonlight Game Streaming Project" UpgradeCode="cae27153-26ed-4da2-8dd5-8cddc7126a05">
+  <Product Id="*" Name="IPv6 Forwarder for GameStream" Language="1033" Version="!(bind.fileVersion.GSv6FwdExe)"
+           Manufacturer="Moonlight Game Streaming Project" UpgradeCode="cae27153-26ed-4da2-8dd5-8cddc7126a05">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
@@ -15,7 +16,7 @@
   <Fragment>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFilesFolder">
-        <Directory Id="INSTALLFOLDER" Name="GS IPv6 Forwarder" />
+        <Directory Id="INSTALLFOLDER" Name="IPv6 Forwarder for GameStream" />
       </Directory>
     </Directory>
   </Fragment>
@@ -23,7 +24,7 @@
   <Fragment>
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
       <Component Id="ProductComponent">
-        <File Source="$(var.GSv6Fwd.TargetPath)" KeyPath="yes">
+        <File Source="$(var.GSv6Fwd.TargetPath)" KeyPath="yes" Id="GSv6FwdExe">
           <fire:FirewallException Id="FwException"
                                   Scope="any"
                                   Name="IPv6 Forwarder for GS Protocol"/>

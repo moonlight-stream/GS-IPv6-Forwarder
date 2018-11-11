@@ -150,6 +150,9 @@
     <ClCompile Include="GSv6Fwd.cpp" />
     <ClCompile Include="pcp.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="GSv6Fwd.rc" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
