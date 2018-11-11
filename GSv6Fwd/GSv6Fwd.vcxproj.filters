@@ -18,5 +18,8 @@
     <ClCompile Include="GSv6Fwd.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="pcp.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>
