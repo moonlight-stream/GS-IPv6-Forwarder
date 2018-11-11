@@ -581,6 +581,7 @@ int Run(void)
 	}
 
 	do {
+		ResetEvent(ifaceChangeEvent);
 		UpdatePcpPinholes();
 	} while (WaitForSingleObject(ifaceChangeEvent, 120 * 1000) != WAIT_FAILED);
 
