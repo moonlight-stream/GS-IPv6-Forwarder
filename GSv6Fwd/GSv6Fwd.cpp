@@ -564,6 +564,9 @@ int Run(void)
 	HANDLE ifaceChangeHandle;
 	NotifyIpInterfaceChange(AF_INET6, IpInterfaceChangeNotificationCallback, ifaceChangeEvent, false, &ifaceChangeHandle);
 
+	// Ensure we get adequate CPU time even when the PC is heavily loaded
+	SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+
 	for (int i = 0; i < ARRAYSIZE(TCP_PORTS); i++) {
 		err = StartTcpRelay(TCP_PORTS[i]);
 		if (err != 0) {
