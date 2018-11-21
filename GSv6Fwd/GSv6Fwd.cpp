@@ -13,6 +13,12 @@
 #pragma comment(lib, "iphlpapi")
 #include <Iphlpapi.h>
 
+#pragma comment(lib, "miniupnpc.lib")
+#define MINIUPNP_STATICLIB
+#include <miniupnpc/miniupnpc.h>
+#include <miniupnpc/upnpcommands.h>
+#include <miniupnpc/upnperrors.h>
+
 #define SERVICE_NAME L"GSv6FwdSvc"
 
 bool PCPMapPort(PSOCKADDR_STORAGE localAddr, int localAddrLen, PSOCKADDR_STORAGE pcpAddr, int pcpAddrLen, int proto, int port, bool enable, bool indefinite);
@@ -462,6 +468,176 @@ void NETIOAPI_API_ IpInterfaceChangeNotificationCallback(PVOID context, PMIB_IPI
 	SetEvent((HANDLE)context);
 }
 
+void UPnPCreatePinholeForPort(struct UPNPUrls* urls, struct IGDdatas* data, int proto, const char* myAddr, int port)
+{
+	char uniqueId[8];
+	char protoStr[3];
+	char portStr[6];
+
+	snprintf(portStr, sizeof(portStr), "%d", port);
+	snprintf(protoStr, sizeof(protoStr), "%d", proto);
+
+	printf("Creating UPnP IPv6 pinhole for %s %s -> %s...", protoStr, portStr, myAddr);
+
+	// Lease time is in seconds - 7200 = 2 hours
+	int err = UPNP_AddPinhole(urls->controlURL_6FC, data->IPv6FC.servicetype, "", "0", myAddr, portStr, protoStr, "7200", uniqueId);
+	if (err == UPNPCOMMAND_SUCCESS) {
+		printf("OK\n");
+	}
+	else {
+		printf("ERROR %d (%s)\n", err, strupnperror(err));
+	}
+}
+
+void UPnPCreatePinholesForInterface(struct UPNPUrls* urls, struct IGDdatas* data, const char* tmpAddr)
+{
+	union {
+		IP_ADAPTER_ADDRESSES addresses;
+		char buffer[8192];
+	};
+	ULONG error;
+	ULONG length;
+	PIP_ADAPTER_ADDRESSES currentAdapter;
+	PIP_ADAPTER_UNICAST_ADDRESS currentAddress;
+	in6_addr targetAddress;
+
+	inet_pton(AF_INET6, tmpAddr, &targetAddress);
+
+	// Get a list of all interfaces with IPv6 addresses on the system
+	length = sizeof(buffer);
+	error = GetAdaptersAddresses(AF_INET6,
+		GAA_FLAG_SKIP_ANYCAST |
+		GAA_FLAG_SKIP_MULTICAST |
+		GAA_FLAG_SKIP_DNS_SERVER |
+		GAA_FLAG_SKIP_FRIENDLY_NAME,
+		NULL,
+		&addresses,
+		&length);
+	if (error != ERROR_SUCCESS) {
+		printf("GetAdaptersAddresses() failed: %d\n", error);
+		return;
+	}
+
+	currentAdapter = &addresses;
+	currentAddress = nullptr;
+	while (currentAdapter != nullptr) {
+		// First, search for the adapter
+		currentAddress = currentAdapter->FirstUnicastAddress;
+		while (currentAddress != nullptr) {
+			assert(currentAddress->Address.lpSockaddr->sa_family == AF_INET6);
+
+			PSOCKADDR_IN6 currentAddrV6 = (PSOCKADDR_IN6)currentAddress->Address.lpSockaddr;
+
+			if (RtlEqualMemory(&currentAddrV6->sin6_addr, &targetAddress, sizeof(targetAddress))) {
+				// Found interface with matching address
+				break;
+			}
+
+			currentAddress = currentAddress->Next;
+		}
+
+		if (currentAddress != nullptr) {
+			// Get out of the loop if we found the matching address
+			break;
+		}
+
+		currentAdapter = currentAdapter->Next;
+	}
+
+	if (currentAdapter == nullptr) {
+		printf("No adapter found with IPv6 address: %s\n", tmpAddr);
+		return;
+	}
+
+	// Now currentAdapter is the adapter we reached the IGD with. Create pinholes for all
+	// public IPv6 addresses on this interface using this IGD.
+	currentAddress = currentAdapter->FirstUnicastAddress;
+	while (currentAddress != nullptr) {
+		assert(currentAddress->Address.lpSockaddr->sa_family == AF_INET6);
+
+		PSOCKADDR_IN6 currentAddrV6 = (PSOCKADDR_IN6)currentAddress->Address.lpSockaddr;
+
+		// Exclude link-local addresses
+		if (currentAddrV6->sin6_scope_id == 0) {
+			char currentAddrStr[128] = {};
+
+			inet_ntop(AF_INET6, &currentAddrV6->sin6_addr, currentAddrStr, sizeof(currentAddrStr));
+
+			for (int i = 0; i < ARRAYSIZE(TCP_PORTS); i++) {
+				UPnPCreatePinholeForPort(urls, data, IPPROTO_TCP, currentAddrStr, TCP_PORTS[i]);
+			}
+			for (int i = 0; i < ARRAYSIZE(UDP_PORTS); i++) {
+				UPnPCreatePinholeForPort(urls, data, IPPROTO_UDP, currentAddrStr, UDP_PORTS[i]);
+			}
+		}
+
+		currentAddress = currentAddress->Next;
+	}
+}
+
+void UpdateUpnpPinholes()
+{
+	int upnpErr;
+	struct UPNPUrls urls;
+	struct IGDdatas data;
+	char localAddress[128];
+	char ipv6WanAddr[128] = {};
+
+	struct UPNPDev* ipv6Devs = upnpDiscoverAll(5000, nullptr, nullptr, UPNP_LOCAL_PORT_ANY, 1, 2, &upnpErr);
+	printf("UPnP IPv6 IGD discovery completed with error code: %d\n", upnpErr);
+
+	int ret = UPNP_GetValidIGD(ipv6Devs, &urls, &data, localAddress, sizeof(localAddress));
+	if (ret == 0) {
+		printf("No UPnP device found!\n");
+		freeUPNPDevlist(ipv6Devs);
+		return;
+	}
+	else if (ret == 3) {
+		printf("No UPnP IGD found!\n");
+		FreeUPNPUrls(&urls);
+		freeUPNPDevlist(ipv6Devs);
+		return;
+	}
+	else if (ret == 1) {
+		printf("Found a connected UPnP IGD\n");
+	}
+	else if (ret == 2) {
+		printf("Found a disconnected UPnP IGD (!)\n");
+	}
+	else {
+		printf("UPNP_GetValidIGD() failed: %d\n", ret);
+		freeUPNPDevlist(ipv6Devs);
+		return;
+	}
+
+	// Don't try IPv6FC without a control URL
+	if (data.IPv6FC.controlurl[0] != 0) {
+		int firewallEnabled, pinholeAllowed;
+		
+		// Check if this firewall supports IPv6 pinholes
+		ret = UPNP_GetFirewallStatus(urls.controlURL_6FC, data.IPv6FC.servicetype, &firewallEnabled, &pinholeAllowed);
+		if (ret == UPNPCOMMAND_SUCCESS) {
+			printf("UPnP IPv6 firewall control available. Firewall is %s, pinhole is %s\n",
+				firewallEnabled ? "enabled" : "disabled",
+				pinholeAllowed ? "allowed" : "disallowed");
+
+			if (pinholeAllowed) {
+				// If the IGD supports IPv6 pinholes, create them for all IPv6 addresses on this interface
+				UPnPCreatePinholesForInterface(&urls, &data, localAddress);
+			}
+		}
+		else {
+			printf("UPnP IPv6 firewall control is unavailable with error %d (%s)\n", ret, strupnperror(ret));
+		}
+	}
+	else {
+		printf("IPv6 firewall control not supported by UPnP IGD!\n");
+	}
+
+	FreeUPNPUrls(&urls);
+	freeUPNPDevlist(ipv6Devs);
+}
+
 void UpdatePcpPinholes()
 {
 	union {
@@ -504,7 +680,7 @@ void UpdatePcpPinholes()
 
 		printf("Using PCP server: %s%%%d\n", addressStr, gatewayAddrV6->sin6_scope_id);
 
-		// Create pinholes for all public IPv6 addresses
+		// Create pinholes for all IPv6 GUAs
 		currentAddress = currentAdapter->FirstUnicastAddress;
 		while (currentAddress != NULL) {
 			assert(currentAddress->Address.lpSockaddr->sa_family == AF_INET6);
@@ -586,6 +762,7 @@ int Run(void)
 	do {
 		ResetEvent(ifaceChangeEvent);
 		UpdatePcpPinholes();
+		UpdateUpnpPinholes();
 	} while (WaitForSingleObject(ifaceChangeEvent, 120 * 1000) != WAIT_FAILED);
 
 	return 0;
