@@ -244,6 +244,8 @@ TcpListenerThreadProc(LPVOID Context)
 		targetAddress.sin_family = AF_INET;
 		targetAddress.sin_port = htons(tuple->port);
 		if (FindLocalAddressBySocket(acceptedSocket, &targetAddress.sin_addr) != 0) {
+			closesocket(acceptedSocket);
+			closesocket(targetSocket);
 			continue;
 		}
 
