@@ -267,7 +267,7 @@ TcpListenerThreadProc(LPVOID Context)
 		relayTuple->s2 = targetSocket;
 
 		thread = CreateThread(NULL, 0, TcpRelayThreadProc, relayTuple, 0, NULL);
-		if (thread == INVALID_HANDLE_VALUE) {
+		if (thread == NULL) {
 			fprintf(stderr, "CreateThread() failed: %d\n", GetLastError());
 			closesocket(acceptedSocket);
 			closesocket(targetSocket);
@@ -318,7 +318,7 @@ int StartTcpRelay(unsigned short Port)
 	tuple->port = Port;
 
 	thread = CreateThread(NULL, 0, TcpListenerThreadProc, tuple, 0, NULL);
-	if (thread == INVALID_HANDLE_VALUE) {
+	if (thread == NULL) {
 		fprintf(stderr, "CreateThread() failed: %d\n", GetLastError());
 		return GetLastError();
 	}
@@ -455,7 +455,7 @@ int StartUdpRelay(unsigned short Port)
 	tuple->port = Port;
 
 	thread = CreateThread(NULL, 0, UdpRelayThreadProc, tuple, 0, NULL);
-	if (thread == INVALID_HANDLE_VALUE) {
+	if (thread == NULL) {
 		fprintf(stderr, "CreateThread() failed: %d\n", GetLastError());
 		return GetLastError();
 	}
