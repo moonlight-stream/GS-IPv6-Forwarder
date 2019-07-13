@@ -7,6 +7,7 @@
 
 #pragma comment(lib, "ws2_32")
 #include <WinSock2.h>
+#include <Mswsock.h>
 #include <Ws2ipdef.h>
 #include <WS2tcpip.h>
 
@@ -20,6 +21,8 @@
 #include <miniupnpc/upnperrors.h>
 
 #define SERVICE_NAME L"GSv6FwdSvc"
+
+LPFN_WSARECVMSG WSARecvMsg;
 
 bool PCPMapPort(PSOCKADDR_STORAGE localAddr, int localAddrLen, PSOCKADDR_STORAGE pcpAddr, int pcpAddrLen, int proto, int port, bool enable, bool indefinite);
 
@@ -328,22 +331,84 @@ int StartTcpRelay(unsigned short Port)
 }
 
 int
-ForwardUdpPacket(SOCKET from, SOCKET to,
-				 PSOCKADDR target, int targetLen,
-				 PSOCKADDR source, int sourceLen)
+ForwardUdpPacketV4toV6(PUDP_TUPLE tuple,
+	                   WSABUF* sourceInfoControlBuffer,
+	                   PSOCKADDR_IN6 targetAddress)
 {
-	int len;
+	DWORD len;
 	char buffer[4096];
+	WSABUF buf;
+	WSAMSG msg;
 
-	len = recvfrom(from, buffer, sizeof(buffer), 0, source, &sourceLen);
-	if (len < 0) {
-		fprintf(stderr, "recvfrom() failed: %d\n", WSAGetLastError());
+	buf.buf = buffer;
+	buf.len = sizeof(buffer);
+
+	msg.name = NULL;
+	msg.namelen = 0;
+	msg.lpBuffers = &buf;
+	msg.dwBufferCount = 1;
+	msg.Control.buf = NULL;
+	msg.Control.len = 0;
+	msg.dwFlags = 0;
+	if (WSARecvMsg(tuple->ipv4Socket, &msg, &len, NULL, NULL) == SOCKET_ERROR) {
+		fprintf(stderr, "WSARecvMsg() failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
-	if (sendto(to, buffer, len, 0, target, targetLen) != len) {
-		fprintf(stderr, "sendto() failed: %d\n", WSAGetLastError());
-		// Fake success, since we may just be waiting for a target address
+	msg.name = (PSOCKADDR)targetAddress;
+	msg.namelen = sizeof(*targetAddress);
+	msg.lpBuffers->len = len;
+	msg.Control = *sourceInfoControlBuffer;
+	msg.dwFlags = 0;
+	if (WSASendMsg(tuple->ipv6Socket, &msg, 0, &len, NULL, NULL) == SOCKET_ERROR) {
+		fprintf(stderr, "WSASendMsg() failed: %d\n", WSAGetLastError());
+		return WSAGetLastError();
+	}
+
+	return 0;
+}
+
+int
+ForwardUdpPacketV6toV4(PUDP_TUPLE tuple,
+	                   PSOCKADDR_IN targetAddress,
+	                   /* Out */ WSABUF* destInfoControlBuffer,
+	                   /* Out */ PSOCKADDR_IN6 sourceAddress)
+{
+	DWORD len;
+	char buffer[4096];
+	WSABUF buf;
+	WSAMSG msg;
+
+	buf.buf = buffer;
+	buf.len = sizeof(buffer);
+
+	msg.name = (PSOCKADDR)sourceAddress;
+	msg.namelen = sizeof(*sourceAddress);
+	msg.lpBuffers = &buf;
+	msg.dwBufferCount = 1;
+	msg.Control = *destInfoControlBuffer;
+	msg.dwFlags = 0;
+	if (WSARecvMsg(tuple->ipv6Socket, &msg, &len, NULL, NULL) == SOCKET_ERROR) {
+		fprintf(stderr, "WSARecvMsg() failed: %d\n", WSAGetLastError());
+		return WSAGetLastError();
+	}
+
+	// IPV6_PKTINFO must be populated
+	assert(WSA_CMSG_FIRSTHDR(&msg)->cmsg_level == IPPROTO_IPV6);
+	assert(WSA_CMSG_FIRSTHDR(&msg)->cmsg_type == IPV6_PKTINFO);
+
+	// Copy the returned data length back
+	destInfoControlBuffer->len = msg.Control.len;
+
+	msg.name = (PSOCKADDR)targetAddress;
+	msg.namelen = sizeof(*targetAddress);
+	msg.lpBuffers->len = len;
+	msg.Control.buf = NULL;
+	msg.Control.len = 0;
+	msg.dwFlags = 0;
+	if (WSASendMsg(tuple->ipv4Socket, &msg, 0, &len, NULL, NULL) == SOCKET_ERROR) {
+		fprintf(stderr, "WSASendMsg() failed: %d\n", WSAGetLastError());
+		return WSAGetLastError();
 	}
 
 	return 0;
@@ -358,6 +423,8 @@ UdpRelayThreadProc(LPVOID Context)
 	int err;
 	SOCKADDR_IN6 lastRemote;
 	SOCKADDR_IN localTarget;
+	char lastSourceBuf[1024];
+	WSABUF lastSource;
 
 	printf("UDP relay running for port %d\n", tuple->port);
 
@@ -367,6 +434,7 @@ UdpRelayThreadProc(LPVOID Context)
 	localTarget.sin_addr.S_un.S_addr = htonl(INADDR_LOOPBACK);
 
 	RtlZeroMemory(&lastRemote, sizeof(lastRemote));
+	RtlZeroMemory(&lastSource, sizeof(lastSource));
 
 	for (;;) {
 		FD_ZERO(&fds);
@@ -381,24 +449,24 @@ UdpRelayThreadProc(LPVOID Context)
 		else if (FD_ISSET(tuple->ipv6Socket, &fds)) {
 			// Forwarding incoming IPv6 packets to the IPv4 port
 			// and storing the source address as our current remote
-			// target for sending IPv4 data back.
-			err = ForwardUdpPacket(tuple->ipv6Socket, tuple->ipv4Socket,
-				(PSOCKADDR)&localTarget, sizeof(localTarget),
-				(PSOCKADDR)&lastRemote, sizeof(lastRemote));
-			if (err < 0) {
-				break;
-			}
+			// target for sending IPv4 data back. Collect the address
+			// we received the packet on to be able to send from the same
+			// source when we relay.
+			lastSource.buf = lastSourceBuf;
+			lastSource.len = sizeof(lastSourceBuf);
+
+			// Don't check for errors to prevent transient issues (like GFE not having started yet)
+			// from bringing down the whole relay.
+			ForwardUdpPacketV6toV4(tuple, &localTarget, &lastSource, &lastRemote);
 		}
 		else if (FD_ISSET(tuple->ipv4Socket, &fds)) {
 			// Forwarding incoming IPv4 packets to the last known
-			// address IPv6 address we've heard from. Discard the source.
-			SOCKADDR_STORAGE unused;
-			err = ForwardUdpPacket(tuple->ipv4Socket, tuple->ipv6Socket,
-				(PSOCKADDR)&lastRemote, sizeof(lastRemote),
-				(PSOCKADDR)&unused, sizeof(unused));
-			if (err < 0) {
-				break;
-			}
+			// address IPv6 address we've heard from. Pass the destination data
+			// from the last v6 packet we received to use as the source address.
+
+			// Don't check for errors to prevent transient issues (like GFE not having started yet)
+			// from bringing down the whole relay.
+			ForwardUdpPacketV4toV6(tuple, &lastSource, &lastRemote);
 		}
 	}
 
@@ -416,10 +484,28 @@ int StartUdpRelay(unsigned short Port)
 	SOCKADDR_IN addr;
 	PUDP_TUPLE tuple;
 	HANDLE thread;
+	GUID wsaRecvMsgGuid = WSAID_WSARECVMSG;
+	DWORD bytesReturned;
+	DWORD val;
 
 	ipv6Socket = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
 	if (ipv6Socket == INVALID_SOCKET) {
 		fprintf(stderr, "socket() failed: %d\n", WSAGetLastError());
+		return WSAGetLastError();
+	}
+
+	if (WSAIoctl(ipv6Socket, SIO_GET_EXTENSION_FUNCTION_POINTER, &wsaRecvMsgGuid, sizeof(wsaRecvMsgGuid),
+		         &WSARecvMsg, sizeof(WSARecvMsg), &bytesReturned, NULL, NULL) == SOCKET_ERROR) {
+		fprintf(stderr, "WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER, WSARecvMsg) failed: %d\n", WSAGetLastError());
+		return WSAGetLastError();
+	}
+
+	// IPV6_PKTINFO is required to ensure that the destination IPv6 address matches the source that
+	// we send our reply from. If we don't do this, traffic destined to addresses that aren't the default
+	// outgoing NIC/address will get dropped by the remote party.
+	val = TRUE;
+	if (setsockopt(ipv6Socket, IPPROTO_IPV6, IPV6_PKTINFO, (char*)&val, sizeof(val)) == SOCKET_ERROR) {
+		fprintf(stderr, "setsockopt(IPV6_PKTINFO) failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
