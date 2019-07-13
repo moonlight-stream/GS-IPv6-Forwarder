@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
-     xmlns:fire="http://schemas.microsoft.com/wix/FirewallExtension">
+     xmlns:fire="http://schemas.microsoft.com/wix/FirewallExtension"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
   <Product Id="*" Name="IPv6 Forwarder for GameStream" Language="1033" Version="!(bind.fileVersion.GSv6FwdExe)"
            Manufacturer="Moonlight Game Streaming Project" UpgradeCode="cae27153-26ed-4da2-8dd5-8cddc7126a05">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
@@ -21,6 +22,9 @@
       <Directory Id="ProgramFilesFolder">
         <Directory Id="INSTALLFOLDER" Name="IPv6 Forwarder for GameStream" />
       </Directory>
+      <Directory Id="CommonAppDataFolder">
+        <Directory Name="MISS" Id="MISSLogFolder" />
+      </Directory>
     </Directory>
   </Fragment>
 
@@ -32,6 +36,9 @@
                                   Scope="any"
                                   Name="IPv6 Forwarder for GS Protocol"/>
         </File>
+        <CreateFolder Directory="MISSLogFolder">
+          <util:PermissionEx User="NT SERVICE\GSv6FwdSvc" GenericAll="yes" />
+        </CreateFolder>
         <ServiceInstall Type="ownProcess"
                         Name="GSv6FwdSvc"
                         DisplayName="IPv6 Forwarder for GS Protocol"

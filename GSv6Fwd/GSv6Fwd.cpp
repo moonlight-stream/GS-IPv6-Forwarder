@@ -1,3 +1,5 @@
+#define _CRT_SECURE_NO_WARNINGS
+
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
@@ -19,6 +21,8 @@
 #include <miniupnpc/miniupnpc.h>
 #include <miniupnpc/upnpcommands.h>
 #include <miniupnpc/upnperrors.h>
+
+#include "../version.h"
 
 #define SERVICE_NAME L"GSv6FwdSvc"
 
@@ -145,7 +149,7 @@ FindLocalAddressBySocket(SOCKET s, PIN_ADDR targetAddress)
 	// Get local address of the accepted socket so we can find the interface
 	localSockAddrLen = sizeof(localSockAddr);
 	if (getsockname(s, (PSOCKADDR)&localSockAddr, &localSockAddrLen) == SOCKET_ERROR) {
-		fprintf(stderr, "getsockname() failed: %d\n", WSAGetLastError());
+		printf("getsockname() failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
@@ -160,7 +164,7 @@ FindLocalAddressBySocket(SOCKET s, PIN_ADDR targetAddress)
 		&addresses,
 		&length);
 	if (error != ERROR_SUCCESS) {
-		fprintf(stderr, "GetAdaptersAddresses() failed: %d\n", error);
+		printf("GetAdaptersAddresses() failed: %d\n", error);
 		return error;
 	}
 
@@ -191,7 +195,7 @@ FindLocalAddressBySocket(SOCKET s, PIN_ADDR targetAddress)
 	// Check if we found the incoming interface
 	if (currentAdapter == NULL) {
 		// Hopefully the error is caused by transient interface reconfiguration
-		fprintf(stderr, "Unable to find incoming interface\n");
+		printf("Unable to find incoming interface\n");
 		return WSAENETDOWN;
 	}
 
@@ -212,7 +216,7 @@ FindLocalAddressBySocket(SOCKET s, PIN_ADDR targetAddress)
 	// has no IPv4 connectivity. In this case, we can preserve most
 	// functionality by forwarding via localhost. WoL won't work but
 	// the basic stuff will.
-	fprintf(stderr, "WARNING: No IPv4 connectivity on incoming interface\n");
+	printf("WARNING: No IPv4 connectivity on incoming interface\n");
 	targetAddress->S_un.S_addr = htonl(INADDR_LOOPBACK);
 	return 0;
 }
@@ -232,13 +236,13 @@ TcpListenerThreadProc(LPVOID Context)
 	for (;;) {
 		acceptedSocket = accept(tuple->listener, NULL, 0);
 		if (acceptedSocket == INVALID_SOCKET) {
-			fprintf(stderr, "accept() failed: %d\n", WSAGetLastError());
+			printf("accept() failed: %d\n", WSAGetLastError());
 			break;
 		}
 
 		targetSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 		if (targetSocket == INVALID_SOCKET) {
-			fprintf(stderr, "socket() failed: %d\n", WSAGetLastError());
+			printf("socket() failed: %d\n", WSAGetLastError());
 			closesocket(acceptedSocket);
 			continue;
 		}
@@ -253,7 +257,7 @@ TcpListenerThreadProc(LPVOID Context)
 		}
 
 		if (connect(targetSocket, (PSOCKADDR)&targetAddress, sizeof(targetAddress)) == SOCKET_ERROR) {
-			fprintf(stderr, "connect() failed: %d\n", WSAGetLastError());
+			printf("connect() failed: %d\n", WSAGetLastError());
 			closesocket(acceptedSocket);
 			closesocket(targetSocket);
 			continue;
@@ -271,7 +275,7 @@ TcpListenerThreadProc(LPVOID Context)
 
 		thread = CreateThread(NULL, 0, TcpRelayThreadProc, relayTuple, 0, NULL);
 		if (thread == NULL) {
-			fprintf(stderr, "CreateThread() failed: %d\n", GetLastError());
+			printf("CreateThread() failed: %d\n", GetLastError());
 			closesocket(acceptedSocket);
 			closesocket(targetSocket);
 			free(relayTuple);
@@ -295,7 +299,7 @@ int StartTcpRelay(unsigned short Port)
 
 	listeningSocket = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
 	if (listeningSocket == INVALID_SOCKET) {
-		fprintf(stderr, "socket() failed: %d\n", WSAGetLastError());
+		printf("socket() failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
@@ -303,12 +307,12 @@ int StartTcpRelay(unsigned short Port)
 	addr6.sin6_family = AF_INET6;
 	addr6.sin6_port = htons(Port);
 	if (bind(listeningSocket, (PSOCKADDR)&addr6, sizeof(addr6)) == SOCKET_ERROR) {
-		fprintf(stderr, "bind() failed: %d\n", WSAGetLastError());
+		printf("bind() failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
 	if (listen(listeningSocket, SOMAXCONN) == SOCKET_ERROR) {
-		fprintf(stderr, "listen() failed: %d\n", WSAGetLastError());
+		printf("listen() failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
@@ -322,7 +326,7 @@ int StartTcpRelay(unsigned short Port)
 
 	thread = CreateThread(NULL, 0, TcpListenerThreadProc, tuple, 0, NULL);
 	if (thread == NULL) {
-		fprintf(stderr, "CreateThread() failed: %d\n", GetLastError());
+		printf("CreateThread() failed: %d\n", GetLastError());
 		return GetLastError();
 	}
 
@@ -351,7 +355,7 @@ ForwardUdpPacketV4toV6(PUDP_TUPLE tuple,
 	msg.Control.len = 0;
 	msg.dwFlags = 0;
 	if (WSARecvMsg(tuple->ipv4Socket, &msg, &len, NULL, NULL) == SOCKET_ERROR) {
-		fprintf(stderr, "WSARecvMsg() failed: %d\n", WSAGetLastError());
+		printf("WSARecvMsg() failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
@@ -361,7 +365,7 @@ ForwardUdpPacketV4toV6(PUDP_TUPLE tuple,
 	msg.Control = *sourceInfoControlBuffer;
 	msg.dwFlags = 0;
 	if (WSASendMsg(tuple->ipv6Socket, &msg, 0, &len, NULL, NULL) == SOCKET_ERROR) {
-		fprintf(stderr, "WSASendMsg() failed: %d\n", WSAGetLastError());
+		printf("WSASendMsg() failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
@@ -389,7 +393,7 @@ ForwardUdpPacketV6toV4(PUDP_TUPLE tuple,
 	msg.Control = *destInfoControlBuffer;
 	msg.dwFlags = 0;
 	if (WSARecvMsg(tuple->ipv6Socket, &msg, &len, NULL, NULL) == SOCKET_ERROR) {
-		fprintf(stderr, "WSARecvMsg() failed: %d\n", WSAGetLastError());
+		printf("WSARecvMsg() failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
@@ -407,7 +411,7 @@ ForwardUdpPacketV6toV4(PUDP_TUPLE tuple,
 	msg.Control.len = 0;
 	msg.dwFlags = 0;
 	if (WSASendMsg(tuple->ipv4Socket, &msg, 0, &len, NULL, NULL) == SOCKET_ERROR) {
-		fprintf(stderr, "WSASendMsg() failed: %d\n", WSAGetLastError());
+		printf("WSASendMsg() failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
@@ -490,13 +494,13 @@ int StartUdpRelay(unsigned short Port)
 
 	ipv6Socket = socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
 	if (ipv6Socket == INVALID_SOCKET) {
-		fprintf(stderr, "socket() failed: %d\n", WSAGetLastError());
+		printf("socket() failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
 	if (WSAIoctl(ipv6Socket, SIO_GET_EXTENSION_FUNCTION_POINTER, &wsaRecvMsgGuid, sizeof(wsaRecvMsgGuid),
 		         &WSARecvMsg, sizeof(WSARecvMsg), &bytesReturned, NULL, NULL) == SOCKET_ERROR) {
-		fprintf(stderr, "WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER, WSARecvMsg) failed: %d\n", WSAGetLastError());
+		printf("WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER, WSARecvMsg) failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
@@ -505,7 +509,7 @@ int StartUdpRelay(unsigned short Port)
 	// outgoing NIC/address will get dropped by the remote party.
 	val = TRUE;
 	if (setsockopt(ipv6Socket, IPPROTO_IPV6, IPV6_PKTINFO, (char*)&val, sizeof(val)) == SOCKET_ERROR) {
-		fprintf(stderr, "setsockopt(IPV6_PKTINFO) failed: %d\n", WSAGetLastError());
+		printf("setsockopt(IPV6_PKTINFO) failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
@@ -513,13 +517,13 @@ int StartUdpRelay(unsigned short Port)
 	addr6.sin6_family = AF_INET6;
 	addr6.sin6_port = htons(Port);
 	if (bind(ipv6Socket, (PSOCKADDR)&addr6, sizeof(addr6)) == SOCKET_ERROR) {
-		fprintf(stderr, "bind() failed: %d\n", WSAGetLastError());
+		printf("bind() failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
 	ipv4Socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (ipv4Socket == INVALID_SOCKET) {
-		fprintf(stderr, "socket() failed: %d\n", WSAGetLastError());
+		printf("socket() failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
@@ -527,7 +531,7 @@ int StartUdpRelay(unsigned short Port)
 	addr.sin_family = AF_INET;
 	addr.sin_addr.S_un.S_addr = htonl(INADDR_LOOPBACK);
 	if (bind(ipv4Socket, (PSOCKADDR)&addr, sizeof(addr)) == SOCKET_ERROR) {
-		fprintf(stderr, "bind() failed: %d\n", WSAGetLastError());
+		printf("bind() failed: %d\n", WSAGetLastError());
 		return WSAGetLastError();
 	}
 
@@ -542,7 +546,7 @@ int StartUdpRelay(unsigned short Port)
 
 	thread = CreateThread(NULL, 0, UdpRelayThreadProc, tuple, 0, NULL);
 	if (thread == NULL) {
-		fprintf(stderr, "CreateThread() failed: %d\n", GetLastError());
+		printf("CreateThread() failed: %d\n", GetLastError());
 		return GetLastError();
 	}
 
@@ -749,7 +753,7 @@ void UpdatePcpPinholes()
 		&addresses,
 		&length);
 	if (error != ERROR_SUCCESS) {
-		fprintf(stderr, "GetAdaptersAddresses() failed: %d\n", error);
+		printf("GetAdaptersAddresses() failed: %d\n", error);
 		return;
 	}
 
@@ -811,16 +815,47 @@ void UpdatePcpPinholes()
 	}
 }
 
+void ResetLogFile()
+{
+	char oldLogFilePath[MAX_PATH + 1];
+	char currentLogFilePath[MAX_PATH + 1];
+	char timeString[MAX_PATH + 1] = {};
+	SYSTEMTIME time;
+
+	ExpandEnvironmentStringsA("%ProgramData%\\MISS\\GSv6Fwd-old.log", oldLogFilePath, sizeof(oldLogFilePath));
+	ExpandEnvironmentStringsA("%ProgramData%\\MISS\\GSv6Fwd-current.log", currentLogFilePath, sizeof(currentLogFilePath));
+
+	// Close the existing stdout handle. This is important because otherwise
+	// it may still be open as stdout when we try to MoveFileEx below.
+	fclose(stdout);
+
+	// Rotate the current to the old log file
+	MoveFileExA(currentLogFilePath, oldLogFilePath, MOVEFILE_REPLACE_EXISTING);
+
+	// Redirect stdout to this new file
+	freopen(currentLogFilePath, "w", stdout);
+
+	// Print a log header
+	printf("IPv6 Forwarder for GameStream v" VER_VERSION_STR "\n");
+
+	// Print the current time
+	GetSystemTime(&time);
+	GetTimeFormatA(LOCALE_SYSTEM_DEFAULT, 0, &time, "hh':'mm':'ss tt", timeString, ARRAYSIZE(timeString));
+	printf("The current UTC time is: %s\n", timeString);
+}
+
 int Run(void)
 {
 	int err;
 	WSADATA data;
 
+	ResetLogFile();
+
 	HANDLE ifaceChangeEvent = CreateEvent(nullptr, true, false, nullptr);
 
 	err = WSAStartup(MAKEWORD(2, 0), &data);
 	if (err == SOCKET_ERROR) {
-		fprintf(stderr, "WSAStartup() failed: %d\n", err);
+		printf("WSAStartup() failed: %d\n", err);
 		return err;
 	}
 
@@ -834,7 +869,7 @@ int Run(void)
 	for (int i = 0; i < ARRAYSIZE(TCP_PORTS); i++) {
 		err = StartTcpRelay(TCP_PORTS[i]);
 		if (err != 0) {
-			fprintf(stderr, "Failed to start relay on TCP %d: %d\n", TCP_PORTS[i], err);
+			printf("Failed to start relay on TCP %d: %d\n", TCP_PORTS[i], err);
 			return err;
 		}
 	}
@@ -842,16 +877,25 @@ int Run(void)
 	for (int i = 0; i < ARRAYSIZE(UDP_PORTS); i++) {
 		err = StartUdpRelay(UDP_PORTS[i]);
 		if (err != 0) {
-			fprintf(stderr, "Failed to start relay on UDP %d: %d\n", UDP_PORTS[i], err);
+			printf("Failed to start relay on UDP %d: %d\n", UDP_PORTS[i], err);
 			return err;
 		}
 	}
 
-	do {
+	for (;;) {
 		ResetEvent(ifaceChangeEvent);
 		UpdatePcpPinholes();
 		UpdateUpnpPinholes();
-	} while (WaitForSingleObject(ifaceChangeEvent, 120 * 1000) != WAIT_FAILED);
+
+		printf("Going to sleep...\n");
+		fflush(stdout);
+
+		if (WaitForSingleObject(ifaceChangeEvent, 120 * 1000) == WAIT_FAILED) {
+			break;
+		}
+
+		ResetLogFile();
+	}
 
 	return 0;
 }
@@ -886,7 +930,7 @@ ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv)
 	
 	ServiceStatusHandle = RegisterServiceCtrlHandlerEx(SERVICE_NAME, HandlerEx, NULL);
 	if (ServiceStatusHandle == NULL) {
-		fprintf(stderr, "RegisterServiceCtrlHandlerEx() failed: %d\n", GetLastError());
+		printf("RegisterServiceCtrlHandlerEx() failed: %d\n", GetLastError());
 		return;
 	}
 
