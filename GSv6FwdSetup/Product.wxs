@@ -20,7 +20,7 @@
   <Fragment>
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFilesFolder">
-        <Directory Id="INSTALLFOLDER" Name="IPv6 Forwarder for GameStream" />
+        <Directory Id="INSTALLFOLDER" Name="Moonlight Internet Hosting Tool" />
       </Directory>
       <Directory Id="CommonAppDataFolder">
         <Directory Name="MISS" Id="MISSLogFolder" />
@@ -34,15 +34,15 @@
         <File Source="$(var.GSv6Fwd.TargetPath)" KeyPath="yes" Id="GSv6FwdExe">
           <fire:FirewallException Id="FwException"
                                   Scope="any"
-                                  Name="IPv6 Forwarder for GS Protocol"/>
+                                  Name="Moonlight IPv6 Forwarding Service"/>
         </File>
         <CreateFolder Directory="MISSLogFolder">
           <util:PermissionEx User="NT SERVICE\GSv6FwdSvc" GenericAll="yes" />
         </CreateFolder>
         <ServiceInstall Type="ownProcess"
                         Name="GSv6FwdSvc"
-                        DisplayName="IPv6 Forwarder for GS Protocol"
-                        Description="Provides access to GameStream servers over IPv6 networks"
+                        DisplayName="Moonlight IPv6 Forwarding Service"
+                        Description="Allows Moonlight clients to connect to this PC over IPv6 networks"
                         Start="auto"
                         Account="NT AUTHORITY\LocalService"
                         ErrorControl="ignore"
