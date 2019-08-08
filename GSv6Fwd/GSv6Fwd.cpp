@@ -296,11 +296,17 @@ int StartTcpRelay(unsigned short Port)
     SOCKADDR_IN6 addr6;
     HANDLE thread;
     PLISTENER_TUPLE tuple;
+    DWORD val;
 
     listeningSocket = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
     if (listeningSocket == INVALID_SOCKET) {
         printf("socket() failed: %d\n", WSAGetLastError());
         return WSAGetLastError();
+    }
+
+    val = PROTECTION_LEVEL_UNRESTRICTED;
+    if (setsockopt(listeningSocket, IPPROTO_IPV6, IPV6_PROTECTION_LEVEL, (char*)&val, sizeof(val)) == SOCKET_ERROR) {
+        printf("setsockopt(IPV6_PROTECTION_LEVEL) failed: %d\n", WSAGetLastError());
     }
 
     RtlZeroMemory(&addr6, sizeof(addr6));
@@ -511,6 +517,11 @@ int StartUdpRelay(unsigned short Port)
     if (setsockopt(ipv6Socket, IPPROTO_IPV6, IPV6_PKTINFO, (char*)&val, sizeof(val)) == SOCKET_ERROR) {
         printf("setsockopt(IPV6_PKTINFO) failed: %d\n", WSAGetLastError());
         return WSAGetLastError();
+    }
+
+    val = PROTECTION_LEVEL_UNRESTRICTED;
+    if (setsockopt(ipv6Socket, IPPROTO_IPV6, IPV6_PROTECTION_LEVEL, (char*)&val, sizeof(val)) == SOCKET_ERROR) {
+        printf("setsockopt(IPV6_PROTECTION_LEVEL) failed: %d\n", WSAGetLastError());
     }
 
     RtlZeroMemory(&addr6, sizeof(addr6));
