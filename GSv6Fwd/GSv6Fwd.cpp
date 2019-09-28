@@ -257,7 +257,8 @@ TcpListenerThreadProc(LPVOID Context)
         }
 
         if (connect(targetSocket, (PSOCKADDR)&targetAddress, sizeof(targetAddress)) == SOCKET_ERROR) {
-            printf("connect() failed: %d\n", WSAGetLastError());
+            // FIXME: This can race with reopening stdout and cause a crash in the CRT
+            //printf("connect() failed: %d\n", WSAGetLastError());
             closesocket(acceptedSocket);
             closesocket(targetSocket);
             continue;
