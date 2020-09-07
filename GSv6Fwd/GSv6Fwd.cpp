@@ -833,25 +833,28 @@ void UpdatePcpPinholes()
     free(addresses);
 }
 
-void ResetLogFile()
+void ResetLogFile(bool standaloneExe)
 {
-    char oldLogFilePath[MAX_PATH + 1];
-    char currentLogFilePath[MAX_PATH + 1];
     char timeString[MAX_PATH + 1] = {};
     SYSTEMTIME time;
 
-    ExpandEnvironmentStringsA("%ProgramData%\\MISS\\GSv6Fwd-old.log", oldLogFilePath, sizeof(oldLogFilePath));
-    ExpandEnvironmentStringsA("%ProgramData%\\MISS\\GSv6Fwd-current.log", currentLogFilePath, sizeof(currentLogFilePath));
+    if (!standaloneExe) {
+        char oldLogFilePath[MAX_PATH + 1];
+        char currentLogFilePath[MAX_PATH + 1];
 
-    // Close the existing stdout handle. This is important because otherwise
-    // it may still be open as stdout when we try to MoveFileEx below.
-    fclose(stdout);
+        ExpandEnvironmentStringsA("%ProgramData%\\MISS\\GSv6Fwd-old.log", oldLogFilePath, sizeof(oldLogFilePath));
+        ExpandEnvironmentStringsA("%ProgramData%\\MISS\\GSv6Fwd-current.log", currentLogFilePath, sizeof(currentLogFilePath));
 
-    // Rotate the current to the old log file
-    MoveFileExA(currentLogFilePath, oldLogFilePath, MOVEFILE_REPLACE_EXISTING);
+        // Close the existing stdout handle. This is important because otherwise
+        // it may still be open as stdout when we try to MoveFileEx below.
+        fclose(stdout);
 
-    // Redirect stdout to this new file
-    freopen(currentLogFilePath, "w", stdout);
+        // Rotate the current to the old log file
+        MoveFileExA(currentLogFilePath, oldLogFilePath, MOVEFILE_REPLACE_EXISTING);
+
+        // Redirect stdout to this new file
+        freopen(currentLogFilePath, "w", stdout);
+    }
 
     // Print a log header
     printf("IPv6 Forwarder for GameStream v" VER_VERSION_STR "\n");
@@ -862,12 +865,12 @@ void ResetLogFile()
     printf("The current UTC time is: %s\n", timeString);
 }
 
-int Run(void)
+int Run(bool standaloneExe)
 {
     int err;
     WSADATA data;
 
-    ResetLogFile();
+    ResetLogFile(standaloneExe);
 
     HANDLE ifaceChangeEvent = CreateEvent(nullptr, true, false, nullptr);
 
@@ -912,7 +915,7 @@ int Run(void)
             break;
         }
 
-        ResetLogFile();
+        ResetLogFile(standaloneExe);
     }
 
     return 0;
@@ -964,7 +967,7 @@ ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv)
     SetServiceStatus(ServiceStatusHandle, &ServiceStatus);
 
     // Start the relay
-    err = Run();
+    err = Run(false);
     if (err != 0) {
         ServiceStatus.dwCurrentState = SERVICE_STOPPED;
         ServiceStatus.dwWin32ExitCode = err;
@@ -982,7 +985,7 @@ static const SERVICE_TABLE_ENTRY ServiceTable[] = {
 int main(int argc, char* argv[])
 {
     if (argc == 2 && !strcmp(argv[1], "exe")) {
-        Run();
+        Run(true);
         return 0;
     }
 
