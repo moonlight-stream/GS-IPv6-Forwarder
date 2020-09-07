@@ -25,6 +25,7 @@
 #include "../version.h"
 
 #define SERVICE_NAME L"GSv6FwdSvc"
+#define GAA_INITIAL_SIZE 8192
 
 LPFN_WSARECVMSG WSARecvMsg;
 
@@ -132,44 +133,66 @@ TcpRelayThreadProc(LPVOID Context)
     return 0;
 }
 
-int
+PIP_ADAPTER_ADDRESSES
+AllocAndGetAdaptersAddresses(ULONG Family, ULONG Flags)
+{
+    PIP_ADAPTER_ADDRESSES addresses;
+    ULONG length;
+    ULONG error;
+
+    addresses = NULL;
+    length = GAA_INITIAL_SIZE;
+    do {
+        free(addresses);
+        addresses = (PIP_ADAPTER_ADDRESSES)malloc(length);
+        if (addresses == NULL) {
+            printf("malloc(%u) failed\n", length);
+            return NULL;
+        }
+
+        error = GetAdaptersAddresses(Family, Flags, NULL, addresses, &length);
+    } while (error == ERROR_BUFFER_OVERFLOW);
+
+    if (error != ERROR_SUCCESS) {
+        printf("GetAdaptersAddresses() failed: %d\n", error);
+        free(addresses);
+        return NULL;
+    }
+
+    return addresses;
+}
+
+void
 FindLocalAddressBySocket(SOCKET s, PIN_ADDR targetAddress)
 {
-    union {
-        IP_ADAPTER_ADDRESSES addresses;
-        char buffer[8192];
-    };
-    ULONG error;
-    ULONG length;
+    PIP_ADAPTER_ADDRESSES addresses;
     PIP_ADAPTER_ADDRESSES currentAdapter;
     PIP_ADAPTER_UNICAST_ADDRESS currentAddress;
     SOCKADDR_IN6 localSockAddr;
     int localSockAddrLen;
 
+    // If we fail to find an address, return the loopback address
+    targetAddress->S_un.S_addr = htonl(INADDR_LOOPBACK);
+
     // Get local address of the accepted socket so we can find the interface
     localSockAddrLen = sizeof(localSockAddr);
     if (getsockname(s, (PSOCKADDR)&localSockAddr, &localSockAddrLen) == SOCKET_ERROR) {
         printf("getsockname() failed: %d\n", WSAGetLastError());
-        return WSAGetLastError();
+        return;
     }
 
     // Get a list of all interfaces and addresses on the system
-    length = sizeof(buffer);
-    error = GetAdaptersAddresses(AF_UNSPEC,
+    addresses = AllocAndGetAdaptersAddresses(AF_UNSPEC,
         GAA_FLAG_SKIP_ANYCAST |
         GAA_FLAG_SKIP_MULTICAST |
         GAA_FLAG_SKIP_DNS_SERVER |
-        GAA_FLAG_SKIP_FRIENDLY_NAME,
-        NULL,
-        &addresses,
-        &length);
-    if (error != ERROR_SUCCESS) {
-        printf("GetAdaptersAddresses() failed: %d\n", error);
-        return error;
+        GAA_FLAG_SKIP_FRIENDLY_NAME);
+    if (addresses == NULL) {
+        return;
     }
 
     // First, find the interface that owns the incoming address
-    currentAdapter = &addresses;
+    currentAdapter = addresses;
     while (currentAdapter != NULL) {
         // Check if this interface has the IP address we want
         currentAddress = currentAdapter->FirstUnicastAddress;
@@ -196,7 +219,7 @@ FindLocalAddressBySocket(SOCKET s, PIN_ADDR targetAddress)
     if (currentAdapter == NULL) {
         // Hopefully the error is caused by transient interface reconfiguration
         printf("Unable to find incoming interface\n");
-        return WSAENETDOWN;
+        goto Exit;
     }
 
     // Now find an IPv4 address on this interface
@@ -205,7 +228,7 @@ FindLocalAddressBySocket(SOCKET s, PIN_ADDR targetAddress)
         if (currentAddress->Address.lpSockaddr->sa_family == AF_INET) {
             PSOCKADDR_IN ifaceAddrV4 = (PSOCKADDR_IN)currentAddress->Address.lpSockaddr;
             *targetAddress = ifaceAddrV4->sin_addr;
-            return 0;
+            goto Exit;
         }
 
         currentAddress = currentAddress->Next;
@@ -216,9 +239,10 @@ FindLocalAddressBySocket(SOCKET s, PIN_ADDR targetAddress)
     // has no IPv4 connectivity. In this case, we can preserve most
     // functionality by forwarding via localhost. WoL won't work but
     // the basic stuff will.
-    printf("WARNING: No IPv4 connectivity on incoming interface\n");
-    targetAddress->S_un.S_addr = htonl(INADDR_LOOPBACK);
-    return 0;
+
+Exit:
+    free(addresses);
+    return;
 }
 
 DWORD
@@ -250,11 +274,7 @@ TcpListenerThreadProc(LPVOID Context)
         RtlZeroMemory(&targetAddress, sizeof(targetAddress));
         targetAddress.sin_family = AF_INET;
         targetAddress.sin_port = htons(tuple->port);
-        if (FindLocalAddressBySocket(acceptedSocket, &targetAddress.sin_addr) != 0) {
-            closesocket(acceptedSocket);
-            closesocket(targetSocket);
-            continue;
-        }
+        FindLocalAddressBySocket(acceptedSocket, &targetAddress.sin_addr);
 
         if (connect(targetSocket, (PSOCKADDR)&targetAddress, sizeof(targetAddress)) == SOCKET_ERROR) {
             // FIXME: This can race with reopening stdout and cause a crash in the CRT
@@ -595,12 +615,7 @@ void UPnPCreatePinholeForPort(struct UPNPUrls* urls, struct IGDdatas* data, int 
 
 void UPnPCreatePinholesForInterface(struct UPNPUrls* urls, struct IGDdatas* data, const char* tmpAddr)
 {
-    union {
-        IP_ADAPTER_ADDRESSES addresses;
-        char buffer[8192];
-    };
-    ULONG error;
-    ULONG length;
+    PIP_ADAPTER_ADDRESSES addresses;
     PIP_ADAPTER_ADDRESSES currentAdapter;
     PIP_ADAPTER_UNICAST_ADDRESS currentAddress;
     in6_addr targetAddress;
@@ -608,21 +623,16 @@ void UPnPCreatePinholesForInterface(struct UPNPUrls* urls, struct IGDdatas* data
     inet_pton(AF_INET6, tmpAddr, &targetAddress);
 
     // Get a list of all interfaces with IPv6 addresses on the system
-    length = sizeof(buffer);
-    error = GetAdaptersAddresses(AF_INET6,
+    addresses = AllocAndGetAdaptersAddresses(AF_INET6,
         GAA_FLAG_SKIP_ANYCAST |
         GAA_FLAG_SKIP_MULTICAST |
         GAA_FLAG_SKIP_DNS_SERVER |
-        GAA_FLAG_SKIP_FRIENDLY_NAME,
-        NULL,
-        &addresses,
-        &length);
-    if (error != ERROR_SUCCESS) {
-        printf("GetAdaptersAddresses() failed: %d\n", error);
+        GAA_FLAG_SKIP_FRIENDLY_NAME);
+    if (addresses == NULL) {
         return;
     }
 
-    currentAdapter = &addresses;
+    currentAdapter = addresses;
     currentAddress = nullptr;
     while (currentAdapter != nullptr) {
         // First, search for the adapter
@@ -650,7 +660,7 @@ void UPnPCreatePinholesForInterface(struct UPNPUrls* urls, struct IGDdatas* data
 
     if (currentAdapter == nullptr) {
         printf("No adapter found with IPv6 address: %s\n", tmpAddr);
-        return;
+        goto Exit;
     }
 
     // Now currentAdapter is the adapter we reached the IGD with. Create pinholes for all
@@ -677,6 +687,10 @@ void UPnPCreatePinholesForInterface(struct UPNPUrls* urls, struct IGDdatas* data
 
         currentAddress = currentAddress->Next;
     }
+
+Exit:
+    free(addresses);
+    return;
 }
 
 void UpdateUpnpPinholes()
@@ -744,32 +758,22 @@ void UpdateUpnpPinholes()
 
 void UpdatePcpPinholes()
 {
-    union {
-        IP_ADAPTER_ADDRESSES addresses;
-        char buffer[8192];
-    };
-    ULONG error;
-    ULONG length;
+    PIP_ADAPTER_ADDRESSES addresses;
     PIP_ADAPTER_ADDRESSES currentAdapter;
     PIP_ADAPTER_UNICAST_ADDRESS currentAddress;
 
     // Get all IPv6 interfaces
-    length = sizeof(buffer);
-    error = GetAdaptersAddresses(AF_INET6,
+    addresses = AllocAndGetAdaptersAddresses(AF_INET6,
         GAA_FLAG_SKIP_ANYCAST |
         GAA_FLAG_SKIP_MULTICAST |
         GAA_FLAG_SKIP_DNS_SERVER |
         GAA_FLAG_SKIP_FRIENDLY_NAME |
-        GAA_FLAG_INCLUDE_GATEWAYS,
-        NULL,
-        &addresses,
-        &length);
-    if (error != ERROR_SUCCESS) {
-        printf("GetAdaptersAddresses() failed: %d\n", error);
+        GAA_FLAG_INCLUDE_GATEWAYS);
+    if (addresses == NULL) {
         return;
     }
 
-    currentAdapter = &addresses;
+    currentAdapter = addresses;
     while (currentAdapter != NULL) {
         // Skip over interfaces with no gateway
         if (currentAdapter->FirstGatewayAddress == NULL) {
@@ -825,6 +829,8 @@ void UpdatePcpPinholes()
 
         currentAdapter = currentAdapter->Next;
     }
+
+    free(addresses);
 }
 
 void ResetLogFile()
