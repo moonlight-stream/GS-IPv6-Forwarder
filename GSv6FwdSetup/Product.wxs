@@ -30,7 +30,7 @@
 
   <Fragment>
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
-      <Component Id="ProductComponent">
+      <Component Id="GSv6Fwd">
         <File Source="$(var.GSv6Fwd.TargetPath)" KeyPath="yes" Id="GSv6FwdExe">
           <fire:FirewallException Id="FwException"
                                   Scope="any"
@@ -51,6 +51,12 @@
           <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart" ThirdFailureActionType="restart" ResetPeriodInDays="1" RestartServiceDelayInSeconds="10"/>
         </ServiceInstall>
         <ServiceControl Id="StartService" Start="install" Stop="both" Remove="uninstall" Name="GSv6FwdSvc" Wait="yes" />
+      </Component>
+      <Component Id="MiniupnpcDll">
+        <File Source="$(var.GSv6Fwd.TargetDir)\miniupnpc.dll" KeyPath="yes"/>
+      </Component>
+      <Component Id="LibnatpmpDll">
+        <File Source="$(var.GSv6Fwd.TargetDir)\libnatpmp.dll" KeyPath="yes"/>
       </Component>
     </ComponentGroup>
   </Fragment>
