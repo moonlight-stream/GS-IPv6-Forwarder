@@ -53,10 +53,7 @@
         <ServiceControl Id="StartService" Start="install" Stop="both" Remove="uninstall" Name="GSv6FwdSvc" Wait="yes" />
       </Component>
       <Component Id="MiniupnpcDll">
-        <File Source="$(var.GSv6Fwd.TargetDir)\miniupnpc.dll" KeyPath="yes"/>
-      </Component>
-      <Component Id="LibnatpmpDll">
-        <File Source="$(var.GSv6Fwd.TargetDir)\libnatpmp.dll" KeyPath="yes"/>
+        <File Source="$(var.GSv6Fwd.TargetDir)miniupnpc.dll" KeyPath="yes"/>
       </Component>
     </ComponentGroup>
   </Fragment>
