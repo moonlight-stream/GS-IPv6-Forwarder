@@ -671,8 +671,8 @@ void UPnPCreatePinholesForInterface(struct UPNPUrls* urls, struct IGDdatas* data
 
         PSOCKADDR_IN6 currentAddrV6 = (PSOCKADDR_IN6)currentAddress->Address.lpSockaddr;
 
-        // Exclude link-local addresses
-        if (currentAddrV6->sin6_scope_id == 0) {
+        // Exclude link-local and privacy addresses
+        if (currentAddrV6->sin6_scope_id == 0 && currentAddress->SuffixOrigin != IpSuffixOriginRandom) {
             char currentAddrStr[128] = {};
 
             inet_ntop(AF_INET6, &currentAddrV6->sin6_addr, currentAddrStr, sizeof(currentAddrStr));
@@ -795,8 +795,8 @@ void UpdatePcpPinholes()
 
             PSOCKADDR_IN6 currentAddrV6 = (PSOCKADDR_IN6)currentAddress->Address.lpSockaddr;
 
-            // Exclude link-local addresses
-            if (currentAddrV6->sin6_scope_id == 0) {
+            // Exclude link-local and privacy addresses
+            if (currentAddrV6->sin6_scope_id == 0 && currentAddress->SuffixOrigin != IpSuffixOriginRandom) {
                 inet_ntop(AF_INET6, &currentAddrV6->sin6_addr, addressStr, sizeof(addressStr));
                 printf("Updating PCP mappings for address %s\n", addressStr);
 
