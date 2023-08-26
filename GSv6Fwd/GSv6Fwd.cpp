@@ -311,7 +311,7 @@ TcpListenerThreadProc(LPVOID Context)
     return 0;
 }
 
-int StartTcpRelay(unsigned short Port)
+int StartTcpRelay(unsigned short Port, SOCKET* Listener)
 {
     SOCKET listeningSocket;
     SOCKADDR_IN6 addr6;
@@ -348,7 +348,7 @@ int StartTcpRelay(unsigned short Port)
         return ERROR_OUTOFMEMORY;
     }
 
-    tuple->listener = listeningSocket;
+    tuple->listener = *Listener = listeningSocket;
     tuple->port = Port;
 
     thread = CreateThread(NULL, 0, TcpListenerThreadProc, tuple, 0, NULL);
@@ -507,7 +507,7 @@ UdpRelayThreadProc(LPVOID Context)
     return 0;
 }
 
-int StartUdpRelay(unsigned short Port)
+int StartUdpRelay(unsigned short Port, SOCKET* Ipv4Socket, SOCKET* Ipv6Socket)
 {
     SOCKET ipv6Socket;
     SOCKET ipv4Socket;
@@ -572,8 +572,8 @@ int StartUdpRelay(unsigned short Port)
         return ERROR_OUTOFMEMORY;
     }
 
-    tuple->ipv4Socket = ipv4Socket;
-    tuple->ipv6Socket = ipv6Socket;
+    tuple->ipv4Socket = *Ipv4Socket = ipv4Socket;
+    tuple->ipv6Socket = *Ipv6Socket = ipv6Socket;
     tuple->port = Port;
 
     thread = CreateThread(NULL, 0, UdpRelayThreadProc, tuple, 0, NULL);
@@ -869,6 +869,83 @@ void ResetLogFile(bool standaloneExe)
     printf("The current UTC time is: %s\n", timeString);
 }
 
+bool IsGameStreamEnabled()
+{
+    DWORD error;
+    DWORD enabled;
+    DWORD len;
+    HKEY key;
+
+    error = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Software\\NVIDIA Corporation\\NvStream", 0, KEY_READ | KEY_WOW64_64KEY, &key);
+    if (error != ERROR_SUCCESS) {
+        printf("RegOpenKeyEx() failed: %d\n", error);
+        return false;
+    }
+
+    len = sizeof(enabled);
+    error = RegQueryValueExA(key, "EnableStreaming", nullptr, nullptr, (LPBYTE)&enabled, &len);
+    RegCloseKey(key);
+    if (error != ERROR_SUCCESS) {
+        printf("RegQueryValueExA() failed: %d\n", error);
+        return false;
+    }
+
+    return enabled != 0;
+}
+
+DWORD WINAPI GameStreamStateChangeThread(PVOID Context)
+{
+    HKEY key;
+    DWORD err;
+
+    do {
+        // We're watching this key that way we can still detect GameStream turning on
+        // if GFE wasn't even installed when our service started
+        do {
+            err = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Software\\NVIDIA Corporation", 0, KEY_READ | KEY_WOW64_64KEY, &key);
+            if (err != ERROR_SUCCESS) {
+                // Wait 10 seconds and try again
+                Sleep(10000);
+            }
+        } while (err != ERROR_SUCCESS);
+
+        // Notify the main thread when the GameStream state changes
+        bool lastGameStreamState = IsGameStreamEnabled();
+        while ((err = RegNotifyChangeKeyValue(key, true, REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET, nullptr, false)) == ERROR_SUCCESS) {
+            bool currentGameStreamState = IsGameStreamEnabled();
+            if (lastGameStreamState != currentGameStreamState) {
+                SetEvent((HANDLE)Context);
+            }
+            lastGameStreamState = currentGameStreamState;
+        }
+
+        // If the key is deleted (by DDU or similar), we will hit this code path and poll until it comes back.
+        RegCloseKey(key);
+    } while (err == ERROR_KEY_DELETED);
+
+    return err;
+}
+
+void StartRelay(SOCKET* tcpSockets, SOCKET* udpSockets) {
+    int err;
+
+    for (int i = 0; i < ARRAYSIZE(TCP_PORTS); i++) {
+        err = StartTcpRelay(TCP_PORTS[i], &tcpSockets[i]);
+        if (err != 0) {
+            printf("Failed to start relay on TCP %d: %d\n", TCP_PORTS[i], err);
+            tcpSockets[i] = INVALID_SOCKET;
+        }
+    }
+
+    for (int i = 0; i < ARRAYSIZE(UDP_PORTS); i++) {
+        err = StartUdpRelay(UDP_PORTS[i], &udpSockets[i * 2], &udpSockets[i * 2 + 1]);
+        if (err != 0) {
+            printf("Failed to start relay on UDP %d: %d\n", UDP_PORTS[i], err);
+            udpSockets[i * 2] = udpSockets[i * 2 + 1] = INVALID_SOCKET;
+        }
+    }
+}
+
 int Run(bool standaloneExe)
 {
     int err;
@@ -877,6 +954,7 @@ int Run(bool standaloneExe)
     ResetLogFile(standaloneExe);
 
     HANDLE ifaceChangeEvent = CreateEvent(nullptr, true, false, nullptr);
+    HANDLE gameStreamStateChangeEvent = CreateEvent(nullptr, true, false, nullptr);
 
     err = WSAStartup(MAKEWORD(2, 0), &data);
     if (err == SOCKET_ERROR) {
@@ -888,35 +966,82 @@ int Run(bool standaloneExe)
     HANDLE ifaceChangeHandle;
     NotifyIpInterfaceChange(AF_INET6, IpInterfaceChangeNotificationCallback, ifaceChangeEvent, false, &ifaceChangeHandle);
 
+    // Watch for GameStream state changes
+    HANDLE stateChangeThread = CreateThread(NULL, 0, GameStreamStateChangeThread, gameStreamStateChangeEvent, 0, NULL);
+    if (stateChangeThread == NULL) {
+        printf("CreateThread() failed: %d\n", GetLastError());
+        return GetLastError();
+    }
+    CloseHandle(stateChangeThread);
+
     // Ensure we get adequate CPU time even when the PC is heavily loaded
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
 
-    for (int i = 0; i < ARRAYSIZE(TCP_PORTS); i++) {
-        err = StartTcpRelay(TCP_PORTS[i]);
-        if (err != 0) {
-            printf("Failed to start relay on TCP %d: %d\n", TCP_PORTS[i], err);
-            return err;
-        }
-    }
+    // Keep track of TCP and UDP sockets for the relays. UDP requires 2 sockets per port (1 for v4 and 1 for v6).
+    SOCKET tcpSockets[ARRAYSIZE(TCP_PORTS)] = {};
+    SOCKET udpSockets[ARRAYSIZE(UDP_PORTS) * 2] = {};
 
-    for (int i = 0; i < ARRAYSIZE(UDP_PORTS); i++) {
-        err = StartUdpRelay(UDP_PORTS[i]);
-        if (err != 0) {
-            printf("Failed to start relay on UDP %d: %d\n", UDP_PORTS[i], err);
-            return err;
-        }
+    // Start the relays if GameStream is on
+    if (IsGameStreamEnabled()) {
+        StartRelay(tcpSockets, udpSockets);
     }
 
     for (;;) {
         ResetEvent(ifaceChangeEvent);
-        UpdatePcpPinholes();
-        UpdateUpnpPinholes();
+
+        // Update pinholes if GameStream is enabled
+        if (IsGameStreamEnabled()) {
+            printf("GameStream is enabled\n");
+
+            UpdatePcpPinholes();
+            UpdateUpnpPinholes();
+        }
+        else {
+            printf("GameStream is disabled\n");
+        }
 
         printf("Going to sleep...\n");
         fflush(stdout);
 
-        if (WaitForSingleObject(ifaceChangeEvent, 120 * 1000) == WAIT_FAILED) {
+        HANDLE objects[] = { ifaceChangeEvent, gameStreamStateChangeEvent };
+        switch (WaitForMultipleObjects(2, objects, FALSE, 120 * 1000)) {
+        case WAIT_OBJECT_0:
+            // Interface state changed. Update pinholes immediately.
             break;
+        case WAIT_OBJECT_0 + 1:
+            // GameStream state changed
+            ResetEvent(gameStreamStateChangeEvent);
+
+            // Shutdown all relay sockets to trigger the relay threads to terminate.
+            // The relay threads will call closesocket().
+            for (int i = 0; i < ARRAYSIZE(tcpSockets); i++) {
+                if (tcpSockets[i] != NULL && tcpSockets[i] != INVALID_SOCKET) {
+                    shutdown(tcpSockets[i], SD_BOTH);
+                    CancelIoEx((HANDLE)tcpSockets[i], NULL);
+                    tcpSockets[i] = INVALID_SOCKET;
+                }
+            }
+            for (int i = 0; i < ARRAYSIZE(udpSockets); i++) {
+                if (udpSockets[i] != NULL && udpSockets[i] != INVALID_SOCKET) {
+                    shutdown(udpSockets[i], SD_BOTH);
+                    CancelIoEx((HANDLE)udpSockets[i], NULL);
+                    udpSockets[i] = INVALID_SOCKET;
+                }
+            }
+
+            // If GameStream is now enabled, start the relay
+            if (IsGameStreamEnabled()) {
+                StartRelay(tcpSockets, udpSockets);
+            }
+            else {
+                printf("Stopped relay after GameStream was disabled\n");
+            }
+            break;
+        case WAIT_TIMEOUT:
+            // Time to refresh the pinholes
+            break;
+        case WAIT_FAILED:
+            return -1;
         }
 
         ResetLogFile(standaloneExe);
