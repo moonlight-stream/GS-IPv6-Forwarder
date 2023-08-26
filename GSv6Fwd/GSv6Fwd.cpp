@@ -1007,9 +1007,14 @@ int Run(bool standaloneExe)
         switch (WaitForMultipleObjects(2, objects, FALSE, 120 * 1000)) {
         case WAIT_OBJECT_0:
             // Interface state changed. Update pinholes immediately.
+            ResetLogFile(standaloneExe);
+            printf("Woke up for network interface change\n");
             break;
         case WAIT_OBJECT_0 + 1:
             // GameStream state changed
+            ResetLogFile(standaloneExe);
+            printf("Woke up for GameStream state change\n");
+
             ResetEvent(gameStreamStateChangeEvent);
 
             // Shutdown all relay sockets to trigger the relay threads to terminate.
@@ -1039,12 +1044,13 @@ int Run(bool standaloneExe)
             break;
         case WAIT_TIMEOUT:
             // Time to refresh the pinholes
+            ResetLogFile(standaloneExe);
+            printf("Woke up on refresh timer\n");
             break;
         case WAIT_FAILED:
             return -1;
         }
 
-        ResetLogFile(standaloneExe);
     }
 
     return 0;
